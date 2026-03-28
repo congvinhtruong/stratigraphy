@@ -1,0 +1,10 @@
+# Sensitive / private datasets
+data.json
+data-mf-projects.json
+convert.js
+
+# OS
+.DS_Store
+
+# Claude
+.claude/

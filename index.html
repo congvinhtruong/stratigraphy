@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stratigraphy — 3D Layered Network Visualization</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #f8f7f5;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: #333;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  #canvas-container {
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+  }
+  #canvas-container:active { cursor: grabbing; }
+
+  /* --- Sidebar Filter Panel --- */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 260px;
+    height: 100%;
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(12px);
+    border-right: 1px solid #e0ddd8;
+    padding: 28px 22px;
+    z-index: 10;
+    overflow-y: auto;
+    transition: transform 0.3s ease;
+  }
+  #sidebar.collapsed { transform: translateX(-260px); }
+  #sidebar h1 {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #999;
+    margin-bottom: 24px;
+  }
+  .filter-group { margin-bottom: 20px; }
+  .filter-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aaa;
+    margin-bottom: 8px;
+  }
+  .filter-group select,
+  .filter-group input[type="text"] {
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 13px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fff;
+    color: #333;
+    outline: none;
+    font-family: inherit;
+  }
+  .filter-group select:focus,
+  .filter-group input:focus {
+    border-color: #999;
+  }
+
+  .clear-btn {
+    float: right;
+    background: none;
+    border: none;
+    font-size: 10px;
+    color: #bbb;
+    cursor: pointer;
+    text-transform: lowercase;
+    letter-spacing: 0.04em;
+    font-family: inherit;
+    padding: 0;
+  }
+  .clear-btn:hover { color: #666; }
+
+  .chip-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .chip {
+    display: inline-block;
+    padding: 4px 10px;
+    font-size: 11px;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    color: #777;
+    background: transparent;
+    user-select: none;
+  }
+  .chip.active {
+    background: #333;
+    color: #fff;
+    border-color: #333;
+  }
+  .chip:hover { border-color: #999; }
+
+  #toggle-sidebar {
+    position: fixed;
+    top: 14px;
+    left: 268px;
+    z-index: 11;
+    background: rgba(255,255,255,0.9);
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: #999;
+    transition: left 0.3s ease;
+  }
+  #toggle-sidebar.shifted { left: 8px; }
+
+  /* --- Detail Panel --- */
+  #detail-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 320px;
+    height: 100%;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(12px);
+    border-left: 1px solid #e0ddd8;
+    padding: 28px 22px;
+    z-index: 10;
+    transform: translateX(320px);
+    transition: transform 0.3s ease;
+    overflow-y: auto;
+  }
+  #detail-panel.open { transform: translateX(0); }
+  #detail-panel h2 {
+    font-size: 18px;
+    font-weight: 400;
+    margin-bottom: 4px;
+  }
+  #detail-panel .meta {
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 18px;
+  }
+  #detail-panel .section-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aaa;
+    margin-bottom: 8px;
+    margin-top: 16px;
+  }
+  #detail-panel ul {
+    list-style: none;
+    padding: 0;
+  }
+  #detail-panel ul li {
+    padding: 5px 0;
+    font-size: 13px;
+    color: #555;
+    border-bottom: 1px solid #f0eeeb;
+    cursor: pointer;
+  }
+  #detail-panel ul li:hover { color: #000; }
+  #detail-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #999;
+    line-height: 1;
+  }
+
+  /* --- Year Labels (rendered in HTML overlay) --- */
+  .year-label {
+    position: absolute;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(0,0,0,0.3);
+    pointer-events: none;
+    user-select: none;
+    letter-spacing: 0.04em;
+  }
+
+  /* --- Tooltip --- */
+  #tooltip {
+    position: fixed;
+    padding: 6px 12px;
+    background: rgba(50,50,50,0.88);
+    color: #fff;
+    font-size: 12px;
+    border-radius: 4px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 20;
+    white-space: nowrap;
+  }
+
+  /* --- Legend --- */
+  #legend {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 20px;
+    font-size: 11px;
+    color: #999;
+    z-index: 10;
+    background: rgba(255,255,255,0.8);
+    padding: 8px 18px;
+    border-radius: 20px;
+    border: 1px solid #e8e6e2;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-toggle {
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 10px;
+    transition: opacity 0.2s, background 0.2s;
+    user-select: none;
+  }
+  .legend-toggle:hover { background: rgba(0,0,0,0.05); }
+  .legend-toggle.inactive {
+    opacity: 0.35;
+    text-decoration: line-through;
+  }
+  .legend-desc {
+    font-size: 9px;
+    color: #bbb;
+    margin-left: 2px;
+  }
+  .legend-toggle.inactive .legend-desc { color: #ccc; }
+  /* --- Help Button & Modal --- */
+  #help-btn {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid #ccc;
+    background: rgba(255,255,255,0.9);
+    color: #999;
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+  #help-btn:hover { border-color: #999; color: #555; }
+
+  #help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 100;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #help-overlay.open { display: flex; }
+
+  #help-modal {
+    background: #fff;
+    border-radius: 8px;
+    max-width: 560px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 36px 40px;
+    position: relative;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+  }
+  #help-modal h2 {
+    font-size: 22px;
+    font-weight: 400;
+    margin-bottom: 2px;
+    color: #222;
+  }
+  #help-modal .help-subtitle {
+    font-size: 13px;
+    color: #999;
+    margin-bottom: 24px;
+  }
+  #help-modal h3 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aaa;
+    margin-top: 22px;
+    margin-bottom: 8px;
+  }
+  #help-modal p {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #555;
+    margin-bottom: 10px;
+  }
+  #help-modal ul {
+    list-style: none;
+    padding: 0;
+    margin-bottom: 10px;
+  }
+  #help-modal ul li {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #555;
+    padding: 3px 0;
+  }
+  #help-modal code {
+    background: #f3f2f0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+    color: #444;
+  }
+  #help-modal pre {
+    background: #f7f6f4;
+    padding: 14px 16px;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #444;
+    overflow-x: auto;
+    margin: 8px 0 14px;
+    border: 1px solid #eee;
+  }
+  #help-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 22px;
+    cursor: pointer;
+    color: #bbb;
+    line-height: 1;
+  }
+  #help-close:hover { color: #666; }
+  .help-footer {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid #eee;
+    font-size: 12px;
+    color: #bbb;
+  }
+
+  .legend-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .legend-line {
+    width: 20px; height: 0; border-top: 1px solid; display: inline-block;
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <h1>Stratigraphy</h1>
+  <div class="filter-group">
+    <label>Dataset</label>
+    <select id="dataset-select">
+      <option value="arxiv-ai-data.json">AI Research (ArXiv)</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>Search</label>
+    <input type="text" id="search-input" placeholder="Name or project...">
+  </div>
+  <div class="filter-group">
+    <label>Years <button class="clear-btn" data-target="year-chips">clear</button></label>
+    <div class="chip-container" id="year-chips"></div>
+  </div>
+  <div class="filter-group">
+    <label><span id="project-label">Category</span> <button class="clear-btn" data-target="project-chips">clear</button></label>
+    <div class="chip-container" id="project-chips"></div>
+  </div>
+  <div class="filter-group">
+    <label><span id="country-label">Country</span> <button class="clear-btn" data-target="country-chips">clear</button></label>
+    <div class="chip-container" id="country-chips"></div>
+  </div>
+</div>
+<button id="toggle-sidebar">&lsaquo;</button>
+
+<!-- Detail Panel -->
+<div id="detail-panel">
+  <button id="detail-close">&times;</button>
+  <h2 id="detail-name"></h2>
+  <div class="meta" id="detail-meta"></div>
+  <div class="section-title" id="detail-intra-title">Same Category &amp; Year</div>
+  <ul id="detail-connections"></ul>
+  <div class="section-title" id="detail-across-title" style="display:none">Citations</div>
+  <ul id="detail-across"></ul>
+  <div class="section-title" id="detail-country-title" style="display:none">Same Country</div>
+  <ul id="detail-country"></ul>
+</div>
+
+<!-- Tooltip -->
+<div id="tooltip"></div>
+
+<!-- Help Button -->
+<button id="help-btn">?</button>
+
+<!-- Help Modal -->
+<div id="help-overlay">
+  <div id="help-modal">
+    <button id="help-close">&times;</button>
+    <h2>Stratigraphy</h2>
+    <p class="help-subtitle">A layered network visualization tool</p>
+
+    <h3>About</h3>
+    <p>Stratigraphy renders multi-year relational datasets as stacked network layers in 3D space. Each horizontal plane represents a year, with nodes clustered by category. Connections within a year appear as solid lines; connections across years appear as dashed lines. The size of each circle reflects the volume of activity in that year.</p>
+    <p>Named after the geological study of rock layers, Stratigraphy reveals how relationships, projects, and structures evolve over time &mdash; letting you see both the big picture and the fine detail.</p>
+
+    <h3>How to use</h3>
+    <ul>
+      <li><strong>Orbit</strong> &mdash; Click and drag to rotate the view</li>
+      <li><strong>Zoom</strong> &mdash; Scroll to zoom in and out</li>
+      <li><strong>Hover</strong> &mdash; Mouse over a node to see its tooltip and highlight its connections</li>
+      <li><strong>Click</strong> &mdash; Click a node to zoom in, open the detail panel, and explore its connections</li>
+      <li><strong>Filter</strong> &mdash; Use the sidebar to filter by year, category, or country. Use "clear" to deselect all, then pick specific items</li>
+      <li><strong>Search</strong> &mdash; Type a name, project code, city, or country to find matching nodes</li>
+    </ul>
+
+    <h3>Data format</h3>
+    <p>Stratigraphy reads a single <code>data.json</code> file with the following structure:</p>
+    <pre>{
+  "meta": {
+    "title": "...",
+    "description": "..."
+  },
+  "nodes": [
+    {
+      "id": "unique-id",
+      "label": "Display Name",
+      "year": 2024,
+      "project": "Category",
+      "title": "Full Title",
+      "city": "City",
+      "country": "Country",
+      "website": "https://..."
+    }
+  ],
+  "edges": [
+    {
+      "source": "node-id-1",
+      "target": "node-id-2",
+      "type": "intra | inter",
+      "weight": 3
+    }
+  ]
+}</pre>
+    <p><strong>nodes</strong> &mdash; Each node must have an <code>id</code>, <code>label</code>, <code>year</code>, and <code>project</code> (used for clustering). All other fields are optional metadata shown in the detail panel.</p>
+    <p><strong>edges</strong> &mdash; Each edge connects two node IDs. Set <code>type</code> to <code>"intra"</code> for same-year connections (solid lines) or <code>"inter"</code> for cross-year connections (dashed lines). <code>weight</code> is optional (1&ndash;5).</p>
+
+    <div class="help-footer">Created by Vinh Truong</div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div id="legend">
+  <div class="legend-item legend-toggle active" data-edge-type="intra" title="Click to show/hide">
+    <span class="legend-line" style="border-color:#999"></span>
+    <span id="legend-intra">Same category</span>
+    <span class="legend-desc" id="legend-intra-desc">Shared author</span>
+  </div>
+  <div class="legend-item legend-toggle active" data-edge-type="inter" title="Click to show/hide">
+    <span class="legend-line" style="border-color:#999; border-top-style:dashed"></span>
+    <span>Cross year</span>
+    <span class="legend-desc" id="legend-inter-desc">Citation link</span>
+  </div>
+  <div class="legend-item" style="color:#777; font-size:10px; white-space:nowrap;">Nodes clustered by <span id="legend-cluster">category</span></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── Globals ───
+let scene, camera, renderer, controls;
+let graphData = null;
+let nodeMeshes = [];    // { mesh, data, labelDiv }
+let edgeLines = [];     // { line, source, target, type }
+let ellipses = [];      // { line, year }
+let yearLabels = [];    // DOM elements
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let hoveredNode = null;
+let selectedNode = null;
+let yearScales = {};
+let edgeVisibility = { intra: true, inter: true };
+
+// Filter state
+let activeYears = new Set();
+let activeProjects = new Set();
+let activeCountries = new Set();
+let searchQuery = '';
+
+// Layout constants
+const LAYER_SPACING = 180;
+const ELLIPSE_RX = 420;
+const ELLIPSE_RZ = 160;
+
+// ─── Init ───
+let currentDataFile = 'arxiv-ai-data.json';
+let sceneReady = false;
+
+async function init() {
+  setupScene();
+  await loadDataset(currentDataFile);
+  setupInteraction();
+  animate();
+}
+
+async function loadDataset(file) {
+  // Clear previous graph objects from scene
+  nodeMeshes.forEach(({ mesh, sprite }) => {
+    scene.remove(mesh);
+    if (sprite) scene.remove(sprite);
+  });
+  edgeLines.forEach(({ line }) => scene.remove(line));
+  ellipses.forEach(({ line }) => scene.remove(line));
+  yearLabels.forEach(label => label.remove());
+  nodeMeshes = [];
+  edgeLines = [];
+  ellipses = [];
+  yearLabels = [];
+  yearScales = {};
+  activeYears = new Set();
+  activeProjects = new Set();
+  activeCountries = new Set();
+  searchQuery = '';
+  selectedNode = null;
+  hoveredNode = null;
+  document.getElementById('detail-panel').classList.remove('open');
+  document.getElementById('search-input').value = '';
+
+  const resp = await fetch(file + '?t=' + Date.now());
+  graphData = await resp.json();
+
+  buildGraph();
+  buildFilters();
+
+  // Reset camera
+  controls.target.set(0, 0, 0);
+  camera.position.set(0, 600, 1200);
+}
+
+function setupScene() {
+  const container = document.getElementById('canvas-container');
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf8f7f5);
+
+  camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 8000);
+  camera.position.set(0, 600, 1200);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  container.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 200;
+  controls.maxDistance = 3000;
+  controls.target.set(0, 0, 0);
+  controls.maxPolarAngle = Math.PI * 0.85;
+
+  // Subtle ambient + directional
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.4);
+  dir.position.set(200, 400, 300);
+  scene.add(dir);
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+// ─── Graph Building ───
+function buildGraph() {
+  const years = [...new Set(graphData.nodes.map(n => n.year))].sort((a, b) => a - b);
+  const yearIndex = {};
+  years.forEach((y, i) => yearIndex[y] = i);
+  const midIndex = (years.length - 1) / 2;
+  // Reverse: latest year gets highest Y (top)
+
+  // Layout: cluster by project within each year
+  const yearProjects = {};
+  years.forEach(y => {
+    yearProjects[y] = [...new Set(graphData.nodes.filter(n => n.year === y).map(n => n.project))];
+  });
+
+  // Position nodes
+  const nodePositions = {};
+  graphData.nodes.forEach(n => {
+    const yi = yearIndex[n.year];
+    const layerY = (yi - midIndex) * LAYER_SPACING;
+    const projects = yearProjects[n.year];
+    const pi = projects.indexOf(n.project);
+    const nodesInProject = graphData.nodes.filter(nd => nd.year === n.year && nd.project === n.project);
+    const ni = nodesInProject.indexOf(n);
+
+    // Spread projects around the ellipse
+    const angle = ((pi + 0.5) / projects.length) * Math.PI * 2 - Math.PI / 2;
+    const clusterCx = Math.cos(angle) * ELLIPSE_RX * 0.55;
+    const clusterCz = Math.sin(angle) * ELLIPSE_RZ * 0.55;
+
+    // Spread nodes within cluster
+    const subAngle = ((ni) / nodesInProject.length) * Math.PI * 2;
+    const spread = 22 + nodesInProject.length * 6;
+    const nx = clusterCx + Math.cos(subAngle) * spread;
+    const nz = clusterCz + Math.sin(subAngle) * spread;
+
+    nodePositions[n.id] = new THREE.Vector3(nx, layerY, nz);
+  });
+
+  // Create node meshes
+  // Color palette by Unité
+  const unites = [...new Set(graphData.nodes.map(n => n.project))].sort();
+  const unitePalette = {};
+  const grays = [0x333333, 0x555555, 0x666666, 0x777777, 0x888888, 0x999999, 0xaaaaaa, 0xbbbbbb, 0xcccccc];
+  unites.forEach((u, i) => unitePalette[u] = grays[i % grays.length]);
+
+  // Compute connection degree per node for sizing
+  const nodeDegree = {};
+  graphData.nodes.forEach(n => nodeDegree[n.id] = 0);
+  graphData.edges.forEach(e => {
+    if (nodeDegree[e.source] !== undefined) nodeDegree[e.source]++;
+    if (nodeDegree[e.target] !== undefined) nodeDegree[e.target]++;
+  });
+  const maxDegree = Math.max(1, ...Object.values(nodeDegree));
+  const MIN_RADIUS = 2;
+  const MAX_RADIUS = 7;
+
+  graphData.nodes.forEach(n => {
+    const pos = nodePositions[n.id];
+    const t = Math.sqrt(nodeDegree[n.id] / maxDegree); // sqrt for gentler scaling
+    const radius = MIN_RADIUS + t * (MAX_RADIUS - MIN_RADIUS);
+    const geo = new THREE.SphereGeometry(radius, 16, 16);
+    const mat = new THREE.MeshLambertMaterial({ color: unitePalette[n.project] || 0x999999 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.userData = n;
+    scene.add(mesh);
+    nodeMeshes.push({ mesh, data: n });
+  });
+
+  // Create edges
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x999999, transparent: true, opacity: 0.55 });
+  const dashMat = new THREE.LineDashedMaterial({ color: 0x888888, transparent: true, opacity: 0.45, dashSize: 8, gapSize: 5 });
+
+  graphData.edges.forEach(e => {
+    const p1 = nodePositions[e.source];
+    const p2 = nodePositions[e.target];
+    if (!p1 || !p2) return;
+    const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+    const mat = e.type === 'inter' ? dashMat.clone() : edgeMat.clone();
+    const line = new THREE.Line(geo, mat);
+    if (e.type === 'inter') line.computeLineDistances();
+    scene.add(line);
+    edgeLines.push({ line, source: e.source, target: e.target, type: e.type, weight: e.weight });
+  });
+
+  // Draw ellipses per year — sized by project count
+  const yearCounts = {};
+  years.forEach(y => { yearCounts[y] = graphData.nodes.filter(n => n.year === y).length; });
+  const maxCount = Math.max(...Object.values(yearCounts));
+  const minCount = Math.min(...Object.values(yearCounts));
+  yearScales = {};
+
+  years.forEach((y, i) => {
+    const layerY = (i - midIndex) * LAYER_SPACING;
+    const scale = 0.5 + 0.5 * ((yearCounts[y] - minCount) / (maxCount - minCount || 1));
+    yearScales[y] = scale;
+    const useScale = scale; // default: scaled
+    const curve = new THREE.EllipseCurve(0, 0, ELLIPSE_RX * useScale, ELLIPSE_RZ * useScale, 0, Math.PI * 2, false, 0);
+    const points = curve.getPoints(80);
+    const pts3d = points.map(p => new THREE.Vector3(p.x, layerY, p.y));
+    const geo = new THREE.BufferGeometry().setFromPoints(pts3d);
+    const mat = new THREE.LineBasicMaterial({ color: 0x999590, transparent: true, opacity: 0.8, linewidth: 2 });
+    const ellipse = new THREE.Line(geo, mat);
+    scene.add(ellipse);
+    ellipses.push({ line: ellipse, year: y, layerY });
+
+    // Year label as HTML overlay
+    const label = document.createElement('div');
+    label.className = 'year-label';
+    label.textContent = y;
+    label.dataset.year = y;
+    label.dataset.layerY = layerY;
+    document.body.appendChild(label);
+    yearLabels.push(label);
+  });
+
+  // Create text labels as sprites
+  graphData.nodes.forEach(n => {
+    const sprite = makeTextSprite(n.label, 'default');
+    const pos = nodePositions[n.id];
+    sprite.position.set(pos.x, pos.y + 8, pos.z);
+    sprite.userData = { nodeId: n.id };
+    scene.add(sprite);
+
+    const entry = nodeMeshes.find(nm => nm.data.id === n.id);
+    if (entry) entry.sprite = sprite;
+  });
+}
+
+function makeTextSprite(text, role) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const fontSize = 32;
+  ctx.font = `500 ${fontSize}px Helvetica Neue, Helvetica, Arial, sans-serif`;
+  const width = ctx.measureText(text).width + 12;
+  canvas.width = width;
+  canvas.height = fontSize + 12;
+  ctx.font = `500 ${fontSize}px Helvetica Neue, Helvetica, Arial, sans-serif`;
+  ctx.fillStyle = 'rgba(20,20,20,1.0)';
+  ctx.fillText(text, 6, fontSize);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(width / 6, (fontSize + 12) / 6, 1);
+  return sprite;
+}
+
+// ─── Filters ───
+function buildFilters() {
+  // Clear existing chips
+  document.getElementById('year-chips').innerHTML = '';
+  document.getElementById('project-chips').innerHTML = '';
+  document.getElementById('country-chips').innerHTML = '';
+
+  // Set dynamic labels from metadata
+  const labels = graphData.meta?.labels || {};
+  const projectLabel = labels.project || 'Category';
+  document.getElementById('project-label').textContent = projectLabel;
+  document.getElementById('country-label').textContent = labels.country || 'Country';
+  document.getElementById('legend-intra').textContent = 'Same ' + projectLabel.toLowerCase();
+  document.getElementById('legend-cluster').textContent = projectLabel.toLowerCase();
+  document.getElementById('detail-intra-title').textContent = 'Same ' + projectLabel + ' & Year';
+
+  // Update edge type descriptions based on dataset
+  const edgeDescs = graphData.meta?.edgeDescriptions || {};
+  document.getElementById('legend-intra-desc').textContent = edgeDescs.intra || 'Same group';
+  document.getElementById('legend-inter-desc').textContent = edgeDescs.inter || 'Cross-year link';
+
+  // Reset edge visibility toggles
+  edgeVisibility = { intra: true, inter: true };
+  document.querySelectorAll('.legend-toggle').forEach(el => {
+    el.classList.add('active');
+    el.classList.remove('inactive');
+  });
+
+  const years = [...new Set(graphData.nodes.map(n => n.year))].sort();
+  const projects = [...new Set(graphData.nodes.map(n => n.project))].sort();
+  const countries = [...new Set(graphData.nodes.map(n => n.country).filter(c => c && c !== ''))].sort();
+  years.forEach(y => activeYears.add(y));
+  projects.forEach(p => activeProjects.add(p));
+  countries.forEach(c => activeCountries.add(c));
+
+  buildChips('year-chips', years, activeYears);
+  buildChips('project-chips', projects, activeProjects);
+  buildChips('country-chips', countries, activeCountries);
+
+  // Only bind these once
+  if (!buildFilters._bound) {
+    buildFilters._bound = true;
+
+    document.getElementById('search-input').addEventListener('input', e => {
+      searchQuery = e.target.value.toLowerCase();
+      applyFilters();
+    });
+
+    // Sidebar toggle
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('toggle-sidebar');
+    toggleBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+      toggleBtn.classList.toggle('shifted');
+      toggleBtn.textContent = sidebar.classList.contains('collapsed') ? '\u203A' : '\u2039';
+    });
+  }
+
+  // Clear/select-all buttons — rebind each time since activeSet references change
+  document.querySelectorAll('.clear-btn').forEach(btn => {
+    const newBtn = btn.cloneNode(true); // remove old listeners
+    btn.replaceWith(newBtn);
+    const containerId = newBtn.dataset.target;
+    const setMap = {
+      'year-chips': activeYears,
+      'project-chips': activeProjects,
+      'country-chips': activeCountries
+    };
+    newBtn.addEventListener('click', () => {
+      const activeSet = setMap[containerId];
+      const container = document.getElementById(containerId);
+      const chips = container.querySelectorAll('.chip');
+      const allOff = activeSet.size === 0;
+      if (allOff) {
+        chips.forEach(chip => { activeSet.add(chip.dataset.value); chip.classList.add('active'); });
+        newBtn.textContent = 'clear';
+      } else {
+        activeSet.clear();
+        chips.forEach(chip => chip.classList.remove('active'));
+        newBtn.textContent = 'all';
+      }
+      applyFilters();
+    });
+  });
+}
+
+function buildChips(containerId, items, activeSet) {
+  const container = document.getElementById(containerId);
+  items.forEach(item => {
+    const chip = document.createElement('span');
+    chip.className = 'chip active';
+    chip.textContent = item;
+    chip.dataset.value = item;
+    chip.addEventListener('click', () => {
+      if (activeSet.has(item)) {
+        activeSet.delete(item);
+        chip.classList.remove('active');
+      } else {
+        activeSet.add(item);
+        chip.classList.add('active');
+      }
+      applyFilters();
+    });
+    container.appendChild(chip);
+  });
+}
+
+function applyFilters() {
+  const visibleNodeIds = new Set();
+
+  nodeMeshes.forEach(({ mesh, data, sprite }) => {
+    const matchYear = activeYears.has(data.year);
+    const matchProject = activeProjects.has(data.project);
+    const matchCountry = !data.country || activeCountries.has(data.country);
+    const matchSearch = !searchQuery ||
+      data.label.toLowerCase().includes(searchQuery) ||
+      data.project.toLowerCase().includes(searchQuery) ||
+      (data.title && data.title.toLowerCase().includes(searchQuery)) ||
+      (data.city && data.city.toLowerCase().includes(searchQuery)) ||
+      (data.country && data.country.toLowerCase().includes(searchQuery));
+
+    const visible = matchYear && matchProject && matchCountry && matchSearch;
+    mesh.visible = visible;
+    if (sprite) sprite.visible = visible;
+    if (visible) visibleNodeIds.add(data.id);
+  });
+
+  edgeLines.forEach(({ line, source, target, type }) => {
+    line.visible = visibleNodeIds.has(source) && visibleNodeIds.has(target) && edgeVisibility[type];
+  });
+
+  ellipses.forEach(({ line, year }) => {
+    line.visible = activeYears.has(year);
+  });
+
+  yearLabels.forEach(label => {
+    label.style.display = activeYears.has(Number(label.dataset.year)) ? '' : 'none';
+  });
+}
+
+// ─── Interaction ───
+function setupInteraction() {
+  const tooltip = document.getElementById('tooltip');
+
+  renderer.domElement.addEventListener('mousemove', e => {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    const meshes = nodeMeshes.filter(n => n.mesh.visible).map(n => n.mesh);
+    const intersects = raycaster.intersectObjects(meshes);
+
+    if (intersects.length > 0) {
+      const node = intersects[0].object.userData;
+      tooltip.style.opacity = 1;
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+      tooltip.textContent = `${node.label} — ${node.project} (${node.year})`;
+      document.body.style.cursor = 'pointer';
+
+      if (hoveredNode !== node.id) {
+        hoveredNode = node.id;
+        highlightConnections(node.id, true);
+      }
+    } else {
+      tooltip.style.opacity = 0;
+      document.body.style.cursor = '';
+      if (hoveredNode && !selectedNode) {
+        highlightConnections(hoveredNode, false);
+        hoveredNode = null;
+      }
+    }
+  });
+
+  renderer.domElement.addEventListener('click', e => {
+    raycaster.setFromCamera(mouse, camera);
+    const meshes = nodeMeshes.filter(n => n.mesh.visible).map(n => n.mesh);
+    const intersects = raycaster.intersectObjects(meshes);
+
+    if (intersects.length > 0) {
+      const node = intersects[0].object.userData;
+      selectNode(node);
+    } else {
+      deselectNode();
+    }
+  });
+
+  document.getElementById('detail-close').addEventListener('click', deselectNode);
+
+  // Help modal
+  const helpOverlay = document.getElementById('help-overlay');
+  document.getElementById('help-btn').addEventListener('click', () => helpOverlay.classList.add('open'));
+  document.getElementById('help-close').addEventListener('click', () => helpOverlay.classList.remove('open'));
+  helpOverlay.addEventListener('click', e => { if (e.target === helpOverlay) helpOverlay.classList.remove('open'); });
+
+  // Dataset switcher
+  document.getElementById('dataset-select').addEventListener('change', async e => {
+    currentDataFile = e.target.value;
+    await loadDataset(currentDataFile);
+  });
+
+  // Legend edge type toggles
+  document.querySelectorAll('.legend-toggle').forEach(el => {
+    el.addEventListener('click', () => {
+      const type = el.dataset.edgeType;
+      edgeVisibility[type] = !edgeVisibility[type];
+      el.classList.toggle('active', edgeVisibility[type]);
+      el.classList.toggle('inactive', !edgeVisibility[type]);
+      applyFilters();
+    });
+  });
+}
+
+function highlightConnections(nodeId, on) {
+  const connectedIds = new Set();
+  edgeLines.forEach(({ line, source, target }) => {
+    if (!line.visible) return;
+    if (source === nodeId || target === nodeId) {
+      connectedIds.add(source);
+      connectedIds.add(target);
+      line.material.opacity = on ? 1.0 : (line.material.dashSize ? 0.45 : 0.55);
+      line.material.color.set(on ? 0x222222 : (line.material.dashSize ? 0x888888 : 0x999999));
+    }
+  });
+
+  nodeMeshes.forEach(({ mesh, data }) => {
+    if (!mesh.visible) return;
+    if (on && data.id !== nodeId && !connectedIds.has(data.id)) {
+      mesh.material.opacity = 0.2;
+      mesh.material.transparent = true;
+    } else {
+      mesh.material.opacity = 1;
+      mesh.material.transparent = false;
+    }
+  });
+}
+
+function selectNode(node) {
+  selectedNode = node.id;
+  highlightConnections(node.id, true);
+
+  // Animate camera to focus
+  const entry = nodeMeshes.find(n => n.data.id === node.id);
+  if (entry) {
+    const target = entry.mesh.position.clone();
+    animateCameraTo(target);
+  }
+
+  // Fill detail panel
+  document.getElementById('detail-name').textContent = node.title || node.label;
+  const metaParts = [node.label, node.project, node.year];
+  if (node.city) metaParts.push(node.city);
+  if (node.country) metaParts.push(node.country);
+  document.getElementById('detail-meta').textContent = metaParts.join(' — ');
+  // Add website link if present
+  if (node.website) {
+    const link = document.createElement('a');
+    link.href = node.website;
+    link.target = '_blank';
+    link.style.cssText = 'display:block;font-size:12px;color:#888;margin-top:4px;';
+    link.textContent = 'View on website';
+    document.getElementById('detail-meta').appendChild(link);
+  }
+
+  const connList = document.getElementById('detail-connections');
+  const acrossList = document.getElementById('detail-across');
+  const acrossTitle = document.getElementById('detail-across-title');
+  const countryList = document.getElementById('detail-country');
+  const countryTitle = document.getElementById('detail-country-title');
+  connList.innerHTML = '';
+  acrossList.innerHTML = '';
+  countryList.innerHTML = '';
+
+  const intra = [];
+  const citedBy = [];   // papers that cite this node (source→this node as target)
+  const cites = [];     // papers this node cites (this node as source→target)
+
+  graphData.edges.forEach(e => {
+    if (e.source === node.id || e.target === node.id) {
+      const otherId = e.source === node.id ? e.target : e.source;
+      const other = graphData.nodes.find(n => n.id === otherId);
+      if (other) {
+        if (e.type === 'inter') {
+          // source cites target (source references target)
+          if (e.source === node.id) cites.push(other);
+          else citedBy.push(other);
+        } else {
+          intra.push(other);
+        }
+      }
+    }
+  });
+  const inter = [...citedBy, ...cites];
+
+  intra.forEach(o => {
+    const li = document.createElement('li');
+    li.textContent = `${o.label} — ${o.project}`;
+    li.addEventListener('click', () => selectNode(o));
+    connList.appendChild(li);
+  });
+
+  if (citedBy.length > 0 || cites.length > 0) {
+    acrossTitle.style.display = '';
+    if (citedBy.length > 0) {
+      const header = document.createElement('li');
+      header.textContent = `↓ Cited by (${citedBy.length})`;
+      header.style.cssText = 'font-size:10px;color:#999;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;padding:6px 0 2px;border:none;cursor:default;';
+      acrossList.appendChild(header);
+      citedBy.forEach(o => {
+        const li = document.createElement('li');
+        const parts = [o.label, o.project, o.year];
+        if (o.country) parts.push(o.country);
+        li.textContent = parts.join(' — ');
+        li.addEventListener('click', () => selectNode(o));
+        acrossList.appendChild(li);
+      });
+    }
+    if (cites.length > 0) {
+      const header = document.createElement('li');
+      header.textContent = `↑ Cites (${cites.length})`;
+      header.style.cssText = 'font-size:10px;color:#999;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;padding:6px 0 2px;border:none;cursor:default;';
+      acrossList.appendChild(header);
+      cites.forEach(o => {
+        const li = document.createElement('li');
+        const parts = [o.label, o.project, o.year];
+        if (o.country) parts.push(o.country);
+        li.textContent = parts.join(' — ');
+        li.addEventListener('click', () => selectNode(o));
+        acrossList.appendChild(li);
+      });
+    }
+  } else {
+    acrossTitle.style.display = 'none';
+  }
+
+  // Same-country projects (not already in connections)
+  if (node.country) {
+    const connectedIds = new Set([node.id, ...intra.map(o => o.id), ...inter.map(o => o.id)]);
+    const sameCountry = graphData.nodes.filter(n =>
+      n.id !== node.id && n.country === node.country && !connectedIds.has(n.id)
+    ).slice(0, 15); // cap at 15 to avoid huge lists
+
+    if (sameCountry.length > 0) {
+      countryTitle.style.display = '';
+      countryTitle.textContent = `Same Country (${node.country})`;
+      sameCountry.forEach(o => {
+        const li = document.createElement('li');
+        li.textContent = `${o.label} — ${o.project} (${o.year})`;
+        li.addEventListener('click', () => selectNode(o));
+        countryList.appendChild(li);
+      });
+    } else {
+      countryTitle.style.display = 'none';
+    }
+  } else {
+    countryTitle.style.display = 'none';
+  }
+
+  document.getElementById('detail-panel').classList.add('open');
+}
+
+function deselectNode() {
+  if (selectedNode) {
+    highlightConnections(selectedNode, false);
+    selectedNode = null;
+  }
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+function animateCameraTo(targetPos) {
+  const start = controls.target.clone();
+  const end = targetPos.clone();
+  const startCam = camera.position.clone();
+  const dir = startCam.clone().sub(start).normalize();
+  const endCam = end.clone().add(dir.multiplyScalar(350));
+  const duration = 600;
+  const startTime = performance.now();
+
+  function step(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
+    controls.target.lerpVectors(start, end, ease);
+    camera.position.lerpVectors(startCam, endCam, ease);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ─── Year Label Positioning ───
+function updateYearLabels() {
+  yearLabels.forEach(label => {
+    const year = Number(label.dataset.year);
+    const layerY = Number(label.dataset.layerY);
+    const scale = yearScales[year] || 1;
+    const pos = new THREE.Vector3(ELLIPSE_RX * scale + 28, layerY, 0);
+    pos.project(camera);
+    const x = (pos.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-pos.y * 0.5 + 0.5) * window.innerHeight;
+    label.style.left = x + 'px';
+    label.style.top = (y - 8) + 'px';
+  });
+}
+
+// ─── Animate ───
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  updateYearLabels();
+  renderer.render(scene, camera);
+}
+
+init();
+// Expose for debugging
+window._selectNode = selectNode;
+window._nodeMeshes = () => nodeMeshes;
+window._graphData = () => graphData;
+</script>
+
+</body>
+</html>
