@@ -2,8 +2,7 @@
 
 **Interactive 3D layered network visualization for multi-year relational datasets.**
 
-<!-- Update these URLs after publishing -->
-<!-- [Live Demo](https://YOUR_USERNAME.github.io/stratigraphy/) -->
+[Live Demo](https://congvinhtruong.github.io/stratigraphy/)
 
 Stratigraphy renders temporal network data as stacked elliptical planes in 3D space. Each horizontal layer represents a year, with nodes clustered by category and sized by connection density. Connections within a year appear as solid lines; connections across years appear as dashed lines. The size of each ellipse reflects the volume of activity in that year.
 
