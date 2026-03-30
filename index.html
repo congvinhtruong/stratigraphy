@@ -393,6 +393,14 @@
     </select>
   </div>
   <div class="filter-group">
+    <label>Layout</label>
+    <select id="layout-select">
+      <option value="force">Force-directed</option>
+      <option value="circle">Circle (clustered)</option>
+      <option value="scatter">Scatter</option>
+    </select>
+  </div>
+  <div class="filter-group">
     <label>Search</label>
     <input type="text" id="search-input" placeholder="Name or project...">
   </div>
@@ -418,10 +426,8 @@
   <div class="meta" id="detail-meta"></div>
   <div class="section-title" id="detail-intra-title">Same Category &amp; Year</div>
   <ul id="detail-connections"></ul>
-  <div class="section-title" id="detail-across-title" style="display:none">Citations</div>
+  <div class="section-title" id="detail-across-title" style="display:none">Cited by</div>
   <ul id="detail-across"></ul>
-  <div class="section-title" id="detail-country-title" style="display:none">Same Country</div>
-  <ul id="detail-country"></ul>
 </div>
 
 <!-- Tooltip -->
@@ -449,6 +455,14 @@
       <li><strong>Click</strong> &mdash; Click a node to zoom in, open the detail panel, and explore its connections</li>
       <li><strong>Filter</strong> &mdash; Use the sidebar to filter by year, category, or country. Use "clear" to deselect all, then pick specific items</li>
       <li><strong>Search</strong> &mdash; Type a name, project code, city, or country to find matching nodes</li>
+      <li><strong>Layout</strong> &mdash; Switch between layout modes from the sidebar dropdown</li>
+    </ul>
+
+    <h3>Layout modes</h3>
+    <ul>
+      <li><strong>Force-directed</strong> &mdash; Nodes repel each other and connected nodes attract, creating organic clusters where related items naturally group together. Best for revealing community structure.</li>
+      <li><strong>Circle (clustered)</strong> &mdash; Nodes are arranged in sub-circles grouped by category around the year ellipse. Good for seeing category distribution at a glance.</li>
+      <li><strong>Scatter</strong> &mdash; Nodes are randomly distributed within each year layer. Useful for seeing the density of activity per year without cluster bias.</li>
     </ul>
 
     <h3>Data format</h3>
@@ -495,8 +509,12 @@
   </div>
   <div class="legend-item legend-toggle active" data-edge-type="inter" title="Click to show/hide">
     <span class="legend-line" style="border-color:#999; border-top-style:dashed"></span>
-    <span>Cross year</span>
-    <span class="legend-desc" id="legend-inter-desc">Citation link</span>
+    <span>Cited by</span>
+    <span class="legend-desc" id="legend-inter-desc">Impact flow</span>
+  </div>
+  <div class="legend-item legend-toggle inactive" id="anim-toggle" title="Toggle citation flow animation" style="cursor:pointer;">
+    <span style="font-size:10px;">▸</span>
+    <span style="font-size:10px;">Animate flow</span>
   </div>
   <div class="legend-item" style="color:#777; font-size:10px; white-space:nowrap;">Nodes clustered by <span id="legend-cluster">category</span></div>
 </div>
@@ -526,7 +544,10 @@ let mouse = new THREE.Vector2();
 let hoveredNode = null;
 let selectedNode = null;
 let yearScales = {};
+let yearLabelX = {}; // per-year X position for labels
 let edgeVisibility = { intra: true, inter: true };
+let animateEdges = false;
+let dashTimeUniform = { value: 0.0 };
 
 // Filter state
 let activeYears = new Set();
@@ -564,6 +585,7 @@ async function loadDataset(file) {
   ellipses = [];
   yearLabels = [];
   yearScales = {};
+  yearLabelX = {};
   activeYears = new Set();
   activeProjects = new Set();
   activeCountries = new Set();
@@ -618,6 +640,139 @@ function setupScene() {
   });
 }
 
+// ─── Layout Functions ───
+function hashId(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) { h = ((h << 5) - h + id.charCodeAt(i)) | 0; }
+  return h;
+}
+
+function seededRandom(seed) {
+  let s = seed;
+  return function() { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646; };
+}
+
+function computeLayout(mode, data, years, yearIndex, midIndex, yearProjects) {
+  const fns = { circle: layoutCircle, scatter: layoutScatter, force: layoutForce, spiral: layoutSpiral };
+  return fns[mode](data, years, yearIndex, midIndex, yearProjects);
+}
+
+function layoutCircle(data, years, yearIndex, midIndex, yearProjects) {
+  const positions = {};
+  data.nodes.forEach(n => {
+    const yi = yearIndex[n.year];
+    const layerY = (yi - midIndex) * LAYER_SPACING;
+    const projects = yearProjects[n.year];
+    const pi = projects.indexOf(n.project);
+    const nodesInProject = data.nodes.filter(nd => nd.year === n.year && nd.project === n.project);
+    const ni = nodesInProject.indexOf(n);
+    const angle = ((pi + 0.5) / projects.length) * Math.PI * 2 - Math.PI / 2;
+    const cx = Math.cos(angle) * ELLIPSE_RX * 0.55;
+    const cz = Math.sin(angle) * ELLIPSE_RZ * 0.55;
+    const subAngle = (ni / nodesInProject.length) * Math.PI * 2;
+    const spread = 22 + nodesInProject.length * 6;
+    positions[n.id] = new THREE.Vector3(cx + Math.cos(subAngle) * spread, layerY, cz + Math.sin(subAngle) * spread);
+  });
+  return positions;
+}
+
+function layoutScatter(data, years, yearIndex, midIndex) {
+  const positions = {};
+  data.nodes.forEach(n => {
+    const yi = yearIndex[n.year];
+    const layerY = (yi - midIndex) * LAYER_SPACING;
+    const rng = seededRandom(Math.abs(hashId(n.id)));
+    const r = Math.sqrt(rng()) * 0.85;
+    const theta = rng() * Math.PI * 2;
+    positions[n.id] = new THREE.Vector3(r * ELLIPSE_RX * Math.cos(theta), layerY, r * ELLIPSE_RZ * Math.sin(theta));
+  });
+  return positions;
+}
+
+function layoutForce(data, years, yearIndex, midIndex, yearProjects) {
+  // Start from scatter, then iterate
+  const positions = layoutScatter(data, years, yearIndex, midIndex);
+  const intraEdges = data.edges.filter(e => e.type !== 'inter');
+
+  // Group nodes by year for efficient iteration
+  const yearNodes = {};
+  years.forEach(y => { yearNodes[y] = data.nodes.filter(n => n.year === y); });
+
+  const ITERATIONS = 60;
+  const REPULSION = 800;
+  const SPRING = 0.03;
+  const REST_LEN = 50;
+  const CENTER_PULL = 0.005;
+
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    const forces = {};
+    data.nodes.forEach(n => { forces[n.id] = { x: 0, z: 0 }; });
+
+    // Repulsion within each year layer
+    years.forEach(y => {
+      const nodes = yearNodes[y];
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = positions[nodes[i].id], b = positions[nodes[j].id];
+          let dx = a.x - b.x, dz = a.z - b.z;
+          let dist = Math.sqrt(dx * dx + dz * dz) || 1;
+          const f = Math.min(REPULSION / (dist * dist), 5);
+          const fx = (dx / dist) * f, fz = (dz / dist) * f;
+          forces[nodes[i].id].x += fx; forces[nodes[i].id].z += fz;
+          forces[nodes[j].id].x -= fx; forces[nodes[j].id].z -= fz;
+        }
+      }
+    });
+
+    // Attraction along intra edges
+    intraEdges.forEach(e => {
+      const a = positions[e.source], b = positions[e.target];
+      if (!a || !b) return;
+      let dx = b.x - a.x, dz = b.z - a.z;
+      let dist = Math.sqrt(dx * dx + dz * dz) || 1;
+      const f = (dist - REST_LEN) * SPRING;
+      const fx = (dx / dist) * f, fz = (dz / dist) * f;
+      forces[e.source].x += fx; forces[e.source].z += fz;
+      forces[e.target].x -= fx; forces[e.target].z -= fz;
+    });
+
+    // Center pull + apply
+    data.nodes.forEach(n => {
+      const p = positions[n.id];
+      forces[n.id].x -= p.x * CENTER_PULL;
+      forces[n.id].z -= p.z * CENTER_PULL;
+      p.x += forces[n.id].x;
+      p.z += forces[n.id].z;
+      // Clamp to ellipse bounds
+      p.x = Math.max(-ELLIPSE_RX * 0.95, Math.min(ELLIPSE_RX * 0.95, p.x));
+      p.z = Math.max(-ELLIPSE_RZ * 0.95, Math.min(ELLIPSE_RZ * 0.95, p.z));
+    });
+  }
+  return positions;
+}
+
+function layoutSpiral(data, years, yearIndex, midIndex, yearProjects) {
+  const positions = {};
+  const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+  data.nodes.forEach(n => {
+    const yi = yearIndex[n.year];
+    const layerY = (yi - midIndex) * LAYER_SPACING;
+    const projects = yearProjects[n.year];
+    const pi = projects.indexOf(n.project);
+    const nodesInProject = data.nodes.filter(nd => nd.year === n.year && nd.project === n.project);
+    const ni = nodesInProject.indexOf(n);
+    // Cluster center on ellipse
+    const angle = ((pi + 0.5) / projects.length) * Math.PI * 2 - Math.PI / 2;
+    const cx = Math.cos(angle) * ELLIPSE_RX * 0.55;
+    const cz = Math.sin(angle) * ELLIPSE_RZ * 0.55;
+    // Sunflower spiral within cluster
+    const r = 12 * Math.sqrt(ni + 1);
+    const a = ni * GOLDEN_ANGLE;
+    positions[n.id] = new THREE.Vector3(cx + Math.cos(a) * r, layerY, cz + Math.sin(a) * r);
+  });
+  return positions;
+}
+
 // ─── Graph Building ───
 function buildGraph() {
   const years = [...new Set(graphData.nodes.map(n => n.year))].sort((a, b) => a - b);
@@ -632,28 +787,15 @@ function buildGraph() {
     yearProjects[y] = [...new Set(graphData.nodes.filter(n => n.year === y).map(n => n.project))];
   });
 
-  // Position nodes
-  const nodePositions = {};
-  graphData.nodes.forEach(n => {
-    const yi = yearIndex[n.year];
-    const layerY = (yi - midIndex) * LAYER_SPACING;
-    const projects = yearProjects[n.year];
-    const pi = projects.indexOf(n.project);
-    const nodesInProject = graphData.nodes.filter(nd => nd.year === n.year && nd.project === n.project);
-    const ni = nodesInProject.indexOf(n);
-
-    // Spread projects around the ellipse
-    const angle = ((pi + 0.5) / projects.length) * Math.PI * 2 - Math.PI / 2;
-    const clusterCx = Math.cos(angle) * ELLIPSE_RX * 0.55;
-    const clusterCz = Math.sin(angle) * ELLIPSE_RZ * 0.55;
-
-    // Spread nodes within cluster
-    const subAngle = ((ni) / nodesInProject.length) * Math.PI * 2;
-    const spread = 22 + nodesInProject.length * 6;
-    const nx = clusterCx + Math.cos(subAngle) * spread;
-    const nz = clusterCz + Math.sin(subAngle) * spread;
-
-    nodePositions[n.id] = new THREE.Vector3(nx, layerY, nz);
+  // Position nodes using selected layout
+  const layoutMode = document.getElementById('layout-select').value;
+  const nodePositions = computeLayout(layoutMode, graphData, years, yearIndex, midIndex, yearProjects);
+  const yearMaxX = {};
+  Object.values(nodePositions).forEach(pos => {
+    // Find year from layerY
+    const yi = Math.round(pos.y / LAYER_SPACING + midIndex);
+    const year = years[yi];
+    if (year !== undefined) yearMaxX[year] = Math.max(yearMaxX[year] || 0, Math.abs(pos.x));
   });
 
   // Create node meshes
@@ -689,16 +831,58 @@ function buildGraph() {
 
   // Create edges
   const edgeMat = new THREE.LineBasicMaterial({ color: 0x999999, transparent: true, opacity: 0.55 });
-  const dashMat = new THREE.LineDashedMaterial({ color: 0x888888, transparent: true, opacity: 0.45, dashSize: 8, gapSize: 5 });
+
+  // Custom animated dash shader
+  const animDashMat = new THREE.ShaderMaterial({
+    transparent: true,
+    uniforms: {
+      uColor: { value: new THREE.Color(0x888888) },
+      uOpacity: { value: 0.45 },
+      uDashSize: { value: 8.0 },
+      uGapSize: { value: 5.0 },
+      uTime: dashTimeUniform
+    },
+    vertexShader: `
+      attribute float lineDistance;
+      varying float vLineDistance;
+      void main() {
+        vLineDistance = lineDistance;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      uniform float uDashSize;
+      uniform float uGapSize;
+      uniform float uTime;
+      varying float vLineDistance;
+      void main() {
+        float totalSize = uDashSize + uGapSize;
+        float d = mod(vLineDistance - uTime, totalSize);
+        if (d > uDashSize) discard;
+        gl_FragColor = vec4(uColor, uOpacity);
+      }
+    `
+  });
 
   graphData.edges.forEach(e => {
     const p1 = nodePositions[e.source];
     const p2 = nodePositions[e.target];
     if (!p1 || !p2) return;
-    const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-    const mat = e.type === 'inter' ? dashMat.clone() : edgeMat.clone();
-    const line = new THREE.Line(geo, mat);
-    if (e.type === 'inter') line.computeLineDistances();
+    // For inter edges, order target→source so dash animation flows "cited by" direction
+    const pts = e.type === 'inter' ? [p2, p1] : [p1, p2];
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    let mat, line;
+    if (e.type === 'inter') {
+      mat = animDashMat.clone();
+      mat.uniforms.uTime = dashTimeUniform; // share the same uniform reference
+      line = new THREE.Line(geo, mat);
+      line.computeLineDistances();
+    } else {
+      mat = edgeMat.clone();
+      line = new THREE.Line(geo, mat);
+    }
     scene.add(line);
     edgeLines.push({ line, source: e.source, target: e.target, type: e.type, weight: e.weight });
   });
@@ -714,6 +898,8 @@ function buildGraph() {
     const layerY = (i - midIndex) * LAYER_SPACING;
     const scale = 0.5 + 0.5 * ((yearCounts[y] - minCount) / (maxCount - minCount || 1));
     yearScales[y] = scale;
+    // Label X: use whichever is larger — ellipse edge or furthest node + padding
+    yearLabelX[y] = Math.max(ELLIPSE_RX * scale, (yearMaxX[y] || 0)) + 90;
     const useScale = scale; // default: scaled
     const curve = new THREE.EllipseCurve(0, 0, ELLIPSE_RX * useScale, ELLIPSE_RZ * useScale, 0, Math.PI * 2, false, 0);
     const points = curve.getPoints(80);
@@ -745,6 +931,7 @@ function buildGraph() {
     const entry = nodeMeshes.find(nm => nm.data.id === n.id);
     if (entry) entry.sprite = sprite;
   });
+
 }
 
 function makeTextSprite(text, role) {
@@ -785,7 +972,7 @@ function buildFilters() {
   // Update edge type descriptions based on dataset
   const edgeDescs = graphData.meta?.edgeDescriptions || {};
   document.getElementById('legend-intra-desc').textContent = edgeDescs.intra || 'Same group';
-  document.getElementById('legend-inter-desc').textContent = edgeDescs.inter || 'Cross-year link';
+  document.getElementById('legend-inter-desc').textContent = edgeDescs.inter || 'Impact flow';
 
   // Reset edge visibility toggles
   edgeVisibility = { intra: true, inter: true };
@@ -926,7 +1113,8 @@ function setupInteraction() {
       tooltip.textContent = `${node.label} — ${node.project} (${node.year})`;
       document.body.style.cursor = 'pointer';
 
-      if (hoveredNode !== node.id) {
+      // Only apply hover highlight if no node is selected
+      if (!selectedNode && hoveredNode !== node.id) {
         hoveredNode = node.id;
         highlightConnections(node.id, true);
       }
@@ -948,8 +1136,6 @@ function setupInteraction() {
     if (intersects.length > 0) {
       const node = intersects[0].object.userData;
       selectNode(node);
-    } else {
-      deselectNode();
     }
   });
 
@@ -967,8 +1153,20 @@ function setupInteraction() {
     await loadDataset(currentDataFile);
   });
 
+  // Layout switcher — rebuild graph with new layout
+  document.getElementById('layout-select').addEventListener('change', () => {
+    nodeMeshes.forEach(({ mesh, sprite }) => { scene.remove(mesh); if (sprite) scene.remove(sprite); });
+    edgeLines.forEach(({ line }) => scene.remove(line));
+    ellipses.forEach(({ line }) => scene.remove(line));
+    yearLabels.forEach(l => l.remove());
+    nodeMeshes = []; edgeLines = []; ellipses = []; yearLabels = [];
+    yearScales = {}; yearLabelX = {};
+    buildGraph();
+    applyFilters();
+  });
+
   // Legend edge type toggles
-  document.querySelectorAll('.legend-toggle').forEach(el => {
+  document.querySelectorAll('.legend-toggle[data-edge-type]').forEach(el => {
     el.addEventListener('click', () => {
       const type = el.dataset.edgeType;
       edgeVisibility[type] = !edgeVisibility[type];
@@ -977,28 +1175,67 @@ function setupInteraction() {
       applyFilters();
     });
   });
+
+  // Animation toggle
+  document.getElementById('anim-toggle').addEventListener('click', () => {
+    animateEdges = !animateEdges;
+    const btn = document.getElementById('anim-toggle');
+    btn.classList.toggle('active', animateEdges);
+    btn.classList.toggle('inactive', !animateEdges);
+    if (!animateEdges) dashTimeUniform.value = 0;
+  });
 }
 
 function highlightConnections(nodeId, on) {
   const connectedIds = new Set();
-  edgeLines.forEach(({ line, source, target }) => {
+  // First pass: find connected nodes
+  // For inter edges, only count "cited by" (nodeId is target)
+  edgeLines.forEach(({ line, source, target, type }) => {
     if (!line.visible) return;
-    if (source === nodeId || target === nodeId) {
+    const isCitedBy = type === 'inter' && target === nodeId;
+    const isIntraConn = type !== 'inter' && (source === nodeId || target === nodeId);
+    if (isCitedBy || isIntraConn) {
       connectedIds.add(source);
       connectedIds.add(target);
-      line.material.opacity = on ? 1.0 : (line.material.dashSize ? 0.45 : 0.55);
-      line.material.color.set(on ? 0x222222 : (line.material.dashSize ? 0x888888 : 0x999999));
     }
   });
 
-  nodeMeshes.forEach(({ mesh, data }) => {
+  // Second pass: style all edges
+  edgeLines.forEach(({ line, source, target, type }) => {
+    if (!line.visible) return;
+    const isInter = type === 'inter';
+    const isConnected = isInter
+      ? (target === nodeId) // only "cited by"
+      : (source === nodeId || target === nodeId);
+    if (isInter) {
+      if (on) {
+        line.material.uniforms.uOpacity.value = isConnected ? 0.9 : 0.06;
+        line.material.uniforms.uColor.value.set(isConnected ? 0x222222 : 0x888888);
+      } else {
+        line.material.uniforms.uOpacity.value = 0.45;
+        line.material.uniforms.uColor.value.set(0x888888);
+      }
+    } else {
+      if (on) {
+        line.material.opacity = isConnected ? 1.0 : 0.08;
+        line.material.color.set(isConnected ? 0x222222 : 0x999999);
+      } else {
+        line.material.opacity = 0.55;
+        line.material.color.set(0x999999);
+      }
+    }
+  });
+
+  nodeMeshes.forEach(({ mesh, data, sprite }) => {
     if (!mesh.visible) return;
     if (on && data.id !== nodeId && !connectedIds.has(data.id)) {
-      mesh.material.opacity = 0.2;
+      mesh.material.opacity = 0.1;
       mesh.material.transparent = true;
+      if (sprite) { sprite.material.opacity = 0.1; }
     } else {
       mesh.material.opacity = 1;
       mesh.material.transparent = false;
+      if (sprite) { sprite.material.opacity = 1; }
     }
   });
 }
@@ -1006,13 +1243,6 @@ function highlightConnections(nodeId, on) {
 function selectNode(node) {
   selectedNode = node.id;
   highlightConnections(node.id, true);
-
-  // Animate camera to focus
-  const entry = nodeMeshes.find(n => n.data.id === node.id);
-  if (entry) {
-    const target = entry.mesh.position.clone();
-    animateCameraTo(target);
-  }
 
   // Fill detail panel
   document.getElementById('detail-name').textContent = node.title || node.label;
@@ -1033,15 +1263,11 @@ function selectNode(node) {
   const connList = document.getElementById('detail-connections');
   const acrossList = document.getElementById('detail-across');
   const acrossTitle = document.getElementById('detail-across-title');
-  const countryList = document.getElementById('detail-country');
-  const countryTitle = document.getElementById('detail-country-title');
   connList.innerHTML = '';
   acrossList.innerHTML = '';
-  countryList.innerHTML = '';
 
   const intra = [];
   const citedBy = [];   // papers that cite this node (source→this node as target)
-  const cites = [];     // papers this node cites (this node as source→target)
 
   graphData.edges.forEach(e => {
     if (e.source === node.id || e.target === node.id) {
@@ -1049,16 +1275,13 @@ function selectNode(node) {
       const other = graphData.nodes.find(n => n.id === otherId);
       if (other) {
         if (e.type === 'inter') {
-          // source cites target (source references target)
-          if (e.source === node.id) cites.push(other);
-          else citedBy.push(other);
+          if (e.target === node.id) citedBy.push(other);
         } else {
           intra.push(other);
         }
       }
     }
   });
-  const inter = [...citedBy, ...cites];
 
   intra.forEach(o => {
     const li = document.createElement('li');
@@ -1067,61 +1290,19 @@ function selectNode(node) {
     connList.appendChild(li);
   });
 
-  if (citedBy.length > 0 || cites.length > 0) {
+  if (citedBy.length > 0) {
     acrossTitle.style.display = '';
-    if (citedBy.length > 0) {
-      const header = document.createElement('li');
-      header.textContent = `↓ Cited by (${citedBy.length})`;
-      header.style.cssText = 'font-size:10px;color:#999;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;padding:6px 0 2px;border:none;cursor:default;';
-      acrossList.appendChild(header);
-      citedBy.forEach(o => {
-        const li = document.createElement('li');
-        const parts = [o.label, o.project, o.year];
-        if (o.country) parts.push(o.country);
-        li.textContent = parts.join(' — ');
-        li.addEventListener('click', () => selectNode(o));
-        acrossList.appendChild(li);
-      });
-    }
-    if (cites.length > 0) {
-      const header = document.createElement('li');
-      header.textContent = `↑ Cites (${cites.length})`;
-      header.style.cssText = 'font-size:10px;color:#999;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;padding:6px 0 2px;border:none;cursor:default;';
-      acrossList.appendChild(header);
-      cites.forEach(o => {
-        const li = document.createElement('li');
-        const parts = [o.label, o.project, o.year];
-        if (o.country) parts.push(o.country);
-        li.textContent = parts.join(' — ');
-        li.addEventListener('click', () => selectNode(o));
-        acrossList.appendChild(li);
-      });
-    }
+    acrossTitle.textContent = `Cited by (${citedBy.length})`;
+    citedBy.forEach(o => {
+      const li = document.createElement('li');
+      const parts = [o.label, o.project, o.year];
+      if (o.country) parts.push(o.country);
+      li.textContent = parts.join(' — ');
+      li.addEventListener('click', () => selectNode(o));
+      acrossList.appendChild(li);
+    });
   } else {
     acrossTitle.style.display = 'none';
-  }
-
-  // Same-country projects (not already in connections)
-  if (node.country) {
-    const connectedIds = new Set([node.id, ...intra.map(o => o.id), ...inter.map(o => o.id)]);
-    const sameCountry = graphData.nodes.filter(n =>
-      n.id !== node.id && n.country === node.country && !connectedIds.has(n.id)
-    ).slice(0, 15); // cap at 15 to avoid huge lists
-
-    if (sameCountry.length > 0) {
-      countryTitle.style.display = '';
-      countryTitle.textContent = `Same Country (${node.country})`;
-      sameCountry.forEach(o => {
-        const li = document.createElement('li');
-        li.textContent = `${o.label} — ${o.project} (${o.year})`;
-        li.addEventListener('click', () => selectNode(o));
-        countryList.appendChild(li);
-      });
-    } else {
-      countryTitle.style.display = 'none';
-    }
-  } else {
-    countryTitle.style.display = 'none';
   }
 
   document.getElementById('detail-panel').classList.add('open');
@@ -1131,6 +1312,7 @@ function deselectNode() {
   if (selectedNode) {
     highlightConnections(selectedNode, false);
     selectedNode = null;
+    hoveredNode = null;
   }
   document.getElementById('detail-panel').classList.remove('open');
 }
@@ -1159,8 +1341,7 @@ function updateYearLabels() {
   yearLabels.forEach(label => {
     const year = Number(label.dataset.year);
     const layerY = Number(label.dataset.layerY);
-    const scale = yearScales[year] || 1;
-    const pos = new THREE.Vector3(ELLIPSE_RX * scale + 28, layerY, 0);
+    const pos = new THREE.Vector3(yearLabelX[year] || ELLIPSE_RX + 90, layerY, 0);
     pos.project(camera);
     const x = (pos.x * 0.5 + 0.5) * window.innerWidth;
     const y = (-pos.y * 0.5 + 0.5) * window.innerHeight;
@@ -1170,10 +1351,18 @@ function updateYearLabels() {
 }
 
 // ─── Animate ───
+const DASH_SPEED = 30; // units per second
+
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   updateYearLabels();
+
+  // Animate the shared dash time uniform
+  if (animateEdges) {
+    dashTimeUniform.value = (performance.now() / 1000) * DASH_SPEED;
+  }
+
   renderer.render(scene, camera);
 }
 
