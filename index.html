@@ -805,12 +805,18 @@ function buildGraph() {
   const grays = [0x333333, 0x555555, 0x666666, 0x777777, 0x888888, 0x999999, 0xaaaaaa, 0xbbbbbb, 0xcccccc];
   unites.forEach((u, i) => unitePalette[u] = grays[i % grays.length]);
 
-  // Compute connection degree per node for sizing
+  // Compute "cited by" count per node for sizing (how many papers cite this one)
   const nodeDegree = {};
   graphData.nodes.forEach(n => nodeDegree[n.id] = 0);
   graphData.edges.forEach(e => {
-    if (nodeDegree[e.source] !== undefined) nodeDegree[e.source]++;
-    if (nodeDegree[e.target] !== undefined) nodeDegree[e.target]++;
+    // For inter edges: source cites target, so target gets the cited-by count
+    if (e.type === 'inter') {
+      if (nodeDegree[e.target] !== undefined) nodeDegree[e.target]++;
+    } else {
+      // Intra edges: count both sides
+      if (nodeDegree[e.source] !== undefined) nodeDegree[e.source]++;
+      if (nodeDegree[e.target] !== undefined) nodeDegree[e.target]++;
+    }
   });
   const maxDegree = Math.max(1, ...Object.values(nodeDegree));
   const MIN_RADIUS = 2;
